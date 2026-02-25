@@ -50,7 +50,7 @@ public class PartyMovement : MonoBehaviour
 
                 else
                 {
-                    _partyMembers[i].FollowerSet(_partyMembers[i - 1].transform, (partyOffset).magnitude);
+                    _partyMembers[i].FollowerSet(_partyMembers[i - 1].transform, partyOffset.magnitude);
                 }
             }
         }

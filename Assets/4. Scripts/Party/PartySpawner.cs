@@ -46,6 +46,9 @@ public class PartySpawner : MonoBehaviour
     {
         float offSetX = 0;
         float offSetZ = 0;
+
+        int enemyLayer = LayerMask.NameToLayer("Enemy");
+
         for (int i = 0; i < memberID.Length; i++)
         {
             // 1-2. 해당 칸에 멤버가 없음.
@@ -89,9 +92,25 @@ public class PartySpawner : MonoBehaviour
 
                     // ** 리더 세팅 **
 
-                    if (i == 0)
+                    if (_partyMembers[i] != null && _partyMembers[i].TryGetComponent<CharacterController>(out CharacterController cc))
                     {
-                        _followCam.Follow = _partyMembers[i].transform;
+                        enemyLayer = LayerMask.NameToLayer("Enemy");
+
+                        if (i == 0)
+                        {
+                            _followCam.Follow = _partyMembers[i].transform;
+                            if (enemyLayer != -1)
+                            {
+                                cc.excludeLayers &= ~(1 << enemyLayer);
+                            }
+                        }
+                        else
+                        {
+                            if (enemyLayer != -1)
+                            {
+                                cc.excludeLayers |= (1 << enemyLayer);
+                            }
+                        }
                     }
 
                 }

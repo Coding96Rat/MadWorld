@@ -10,8 +10,8 @@ GameObject:
   m_Component:
   - component: {fileID: 5282081127506606500}
   - component: {fileID: 2882460416028323920}
-  - component: {fileID: 7141731270447689188}
-  m_Layer: 0
+  - component: {fileID: 33984698015211688}
+  m_Layer: 3
   m_Name: Warrior
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -49,8 +49,8 @@ MonoBehaviour:
   _moveSpeedHorizontal: 1.8
   _moveSpeedVertical: 2.5
   LeaderChamp: 0
---- !u!136 &7141731270447689188
-CapsuleCollider:
+--- !u!143 &33984698015211688
+CharacterController:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
@@ -62,16 +62,18 @@ CapsuleCollider:
     m_Bits: 0
   m_ExcludeLayers:
     serializedVersion: 2
-    m_Bits: 0
+    m_Bits: 8
   m_LayerOverridePriority: 0
-  m_IsTrigger: 0
   m_ProvidesContacts: 0
   m_Enabled: 1
-  serializedVersion: 2
+  serializedVersion: 3
+  m_Height: 0.44
   m_Radius: 0.19
-  m_Height: 0.54
-  m_Direction: 1
-  m_Center: {x: 0, y: -0.06, z: 0}
+  m_SlopeLimit: 45
+  m_StepOffset: 0.3
+  m_SkinWidth: 0.08
+  m_MinMoveDistance: 0.001
+  m_Center: {x: 0, y: -0.03, z: 0}
 --- !u!1 &2018300825204962709
 GameObject:
   m_ObjectHideFlags: 0
