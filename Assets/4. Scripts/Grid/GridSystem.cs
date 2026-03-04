@@ -1,10 +1,12 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
 using TMPro;
 using Unity.Cinemachine;
 using UnityEngine;
 
 public class GridSystem : MonoBehaviour
 {
-
     [Header("Grid Settings")]
     public Vector3 _leftBottomLocation = new Vector3(0, 0, 0);
     [Space(10)]
@@ -13,52 +15,60 @@ public class GridSystem : MonoBehaviour
     public float _gridSize = 1;
     [Space(10)]
     public GameObject GridPrefab;
-    public GameObject GridSidePrefab;
     [Space(10)]
+
     [Header("Grid Camera Setting")]
-    [SerializeField]
-    private CinemachineCamera _followCamera;
-    [SerializeField]
-    private Transform _gridCamPoint;
+    [SerializeField] private CinemachineCamera _followCamera;
+    [SerializeField] private Transform _gridCamPoint;
     private Transform _gridFirstCamPoint;
-    [SerializeField]
-    private float _camSpeed = 10f;
+    [SerializeField] private float _camSpeed = 10f;
     [Space(5)]
     [SerializeField] private float _zoomSpeed = 10f;
-    [SerializeField] private float _zoomSmoothSpeed = 10f; // 줌 부드러움 정도 (값이 작을수록 미끄러지듯 멈춤)
-    private float _targetFOV; // 마우스 휠로 결정될 '목표' 시야각
+    [SerializeField] private float _zoomSmoothSpeed = 10f;
+    private float _targetFOV;
     [SerializeField] private float _minZoom = 5f;
     [SerializeField] private float _maxZoom = 20f;
-    [SerializeField] private float _zoomStepAmount = 5f; // 한 번 스크롤 시 변하는 줌 크기 (딱딱 끊기게)
+    [SerializeField] private float _zoomStepAmount = 5f;
 
-    // 더 이상 인스펙터에서 설정하지 않고 코드에서 계산됩니다.
+    [Header("Stage Animation Settings (등장 연출)")]
+    [SerializeField, Tooltip("스테이지가 위로 솟아오를 높이")]
+    private float _riseAmount = 0.45f;
+
+    [SerializeField, Tooltip("목표 위치까지 도달하는데 걸리는 시간 (초)")]
+    private float _riseDuration = 1.5f;
+
+    [Header("Dark Aura Settings (경계선 파티클)")]
+    [SerializeField] private ParticleSystem _borderAuraPrefab;
+
     private float _limitMinX;
     private float _limitMaxX;
     private float _limitMinZ;
     private float _limitMaxZ;
 
+    // 분리된 시스템을 위한 전역 변수
+    private GameObject _stageContainer;
+    private Vector2 _lastMoveInput;
+
     private void Awake()
     {
         if (GridPrefab != null)
         {
+            // 1. 0의 위치에서 생성
             GenerateGrid();
-           
+
+            // 2. 0에서 _riseAmount 만큼 위로 올라가는 연출 시작
+            StartCoroutine(AnimateGrid());
         }
         else
         {
             Debug.LogError("GridPrefab is not assigned in the inspector.");
         }
-
-        
     }
 
     private void Start()
     {
-        // 시작할 때 제한 구역을 계산합니다.
         CalculateCameraLimits();
-
         _gridCamPoint.position = new Vector3(_leftBottomLocation.x + (_columns * _gridSize) / 2 - _gridSize / 2, _leftBottomLocation.y, _limitMinZ);
-
         _followCamera.Follow = _gridCamPoint;
         _gridFirstCamPoint = _gridCamPoint;
 
@@ -69,65 +79,63 @@ public class GridSystem : MonoBehaviour
 
     private void Update()
     {
-        // 1. 입력 확인 (GetKey -> GetKeyDown으로 변경하여 한 번 누를 때 딱 한 칸만 이동)
+        if (InputManager.Instance == null) return;
+
+        // 1. 이동 로직
+        Vector2 currentMove = InputManager.Instance.Move;
         Vector3 moveInput = Vector3.zero;
 
-        // 대각선 이동을 막고 상하좌우 중 한 방향으로만 딱딱 움직이도록 else if 사용
-        if (Input.GetKeyDown(KeyCode.D)) moveInput += Vector3.right;
-        else if (Input.GetKeyDown(KeyCode.A)) moveInput += Vector3.left;
-        else if (Input.GetKeyDown(KeyCode.W)) moveInput += Vector3.forward;
-        else if (Input.GetKeyDown(KeyCode.S)) moveInput += Vector3.back;
+        if (currentMove.x > 0 && _lastMoveInput.x <= 0) moveInput += Vector3.right;
+        else if (currentMove.x < 0 && _lastMoveInput.x >= 0) moveInput += Vector3.left;
 
-        // 2. 이동 적용 및 구역 제한 (입력이 있을 때만 실행)
+        if (currentMove.y > 0 && _lastMoveInput.y <= 0) moveInput += Vector3.forward;
+        else if (currentMove.y < 0 && _lastMoveInput.y >= 0) moveInput += Vector3.back;
+
+        _lastMoveInput = currentMove;
+
         if (moveInput != Vector3.zero)
         {
-            // 현재 위치에서 그리드 사이즈만큼 이동했을 때의 '목표 위치'를 먼저 계산
             Vector3 targetPosition = _gridCamPoint.position + (moveInput * _gridSize);
-
-            // 목표 위치 자체가 인스펙터에서 설정한 제한 구역을 넘지 않도록 Clamp 처리
             targetPosition.x = Mathf.Clamp(targetPosition.x, _limitMinX, _limitMaxX);
             targetPosition.z = Mathf.Clamp(targetPosition.z, _limitMinZ, _limitMaxZ);
-
-            // 딱딱 끊어지게끔 목표 위치로 즉시 이동
             _gridCamPoint.position = new Vector3(targetPosition.x, _gridCamPoint.position.y, targetPosition.z);
         }
 
-        // 4. 스무스를 뺀 딱딱 끊어지는 스텝 방식의 줌 인/아웃
-        float scroll = Input.GetAxis("Mouse ScrollWheel");
+        // 2. 줌(Scroll) 로직
+        float scroll = InputManager.Instance.Scroll;
         if (scroll != 0f)
         {
+            float scrollDir = Mathf.Sign(scroll);
             LensSettings lens = _followCamera.Lens;
 
-            // 스크롤 방향에 따라 _zoomStepAmount 만큼 즉시 가감
-            if (scroll > 0) // 마우스 휠 위로 (줌 인)
-            {
-                lens.FieldOfView -= _zoomStepAmount;
-            }
-            else if (scroll < 0) // 마우스 휠 아래로 (줌 아웃)
-            {
-                lens.FieldOfView += _zoomStepAmount;
-            }
+            if (scrollDir > 0) lens.FieldOfView -= _zoomStepAmount;
+            else if (scrollDir < 0) lens.FieldOfView += _zoomStepAmount;
 
-            // Min과 Max를 넘어가지 않도록 가두기
             lens.FieldOfView = Mathf.Clamp(lens.FieldOfView, _minZoom, _maxZoom);
-
-            // 변경된 값 적용
             _followCamera.Lens = lens;
         }
     }
 
-
+    // ★ 기능 분리: 타일 인스턴스화 담당
     private void GenerateGrid()
     {
+        _stageContainer = new GameObject("StageContainer");
+        _stageContainer.transform.SetParent(this.transform);
+
+        // 컨테이너의 시작 위치는 정확히 0
+        _stageContainer.transform.localPosition = Vector3.zero;
+
         for (int i = 0; i < _columns; i++)
         {
             for (int j = 0; j < _rows; j++)
             {
-                float randomRotation = Random.Range(0, 4) * 90; // Random rotation in multiples of 90 degrees
+                float randomRotation = UnityEngine.Random.Range(0, 4) * 90;
                 GameObject TileObj = Instantiate(GridPrefab,
-                    new Vector3(_leftBottomLocation.x + i * _gridSize, _leftBottomLocation.y,
-                                                            _leftBottomLocation.z + j * _gridSize), Quaternion.Euler(90, randomRotation, 0));
-                TileObj.transform.SetParent(gameObject.transform);
+                    new Vector3(_leftBottomLocation.x + i * _gridSize, _leftBottomLocation.y, _leftBottomLocation.z + j * _gridSize),
+                    Quaternion.Euler(0, randomRotation, 0));
+
+                TileObj.transform.SetParent(_stageContainer.transform);
+
                 if (TileObj.TryGetComponent(out Grid grid))
                 {
                     grid.SetGridCoordinate(i, j);
@@ -135,30 +143,91 @@ public class GridSystem : MonoBehaviour
             }
         }
 
-        // [수정된 부분] (_columns - 1) / 2f * _gridSize 을 사용하여 짝수/홀수 모두 정확한 중앙을 잡습니다.
-        float centerX = _leftBottomLocation.x + ((_columns - 1) / 2f) * _gridSize;
-        GameObject TileSideObj = Instantiate(GridSidePrefab, new Vector3(centerX, _leftBottomLocation.y - 0.5f, _leftBottomLocation.z - 0.5f), Quaternion.identity);
-
-        if (TileSideObj.TryGetComponent(out SpriteRenderer spriteRenderer))
-        {
-            spriteRenderer.material.SetVector("_Tiling", new Vector2(_columns, 1));
-        }
-
-        TileSideObj.transform.localScale = new Vector3(_columns * _gridSize, 1, 1);
-        TileSideObj.transform.SetParent(gameObject.transform);
-
-
+        // (이전에 있던 밑으로 끌어내리는 코드는 완전히 삭제했습니다.)
     }
 
-    // 맵 크기에 맞춰 카메라 이동 제한 구역을 수학적으로 계산하는 함수
+    // ★ 기능 분리: 0에서 시작하여 위로(_riseAmount) 솟아오르는 연출
+    private IEnumerator AnimateGrid()
+    {
+        if (_stageContainer == null) yield break;
+
+        // 시작 지점: 본래 위치인 0 (_leftBottomLocation.y 기준)
+        Vector3 startPos = Vector3.zero;
+
+        // 목표 지점: 0에서 _riseAmount 만큼 위로 올라간 위치
+        Vector3 endPos = new Vector3(0, _riseAmount, 0);
+
+        // 첫 프레임 강제 고정
+        _stageContainer.transform.localPosition = startPos;
+
+        float elapsed = 0f;
+        while (elapsed < _riseDuration)
+        {
+            float t = Mathf.Clamp01(elapsed / _riseDuration);
+            float easeT = t * t * (3f - 2f * t);
+
+            _stageContainer.transform.localPosition = Vector3.Lerp(startPos, endPos, easeT);
+
+            yield return null;
+            elapsed += Time.deltaTime;
+        }
+
+        // 루프가 끝나면 목표 높이에 정확히 안착
+        _stageContainer.transform.localPosition = endPos;
+
+        // ★ 애니메이션 종료 후 아우라 생성
+        GenerateBorderAuras();
+    }
+
     private void CalculateCameraLimits()
     {
-        // X축: 0부터 (Columns - 1)까지
         _limitMinX = 0f;
         _limitMaxX = (_columns - 1) * _gridSize;
+        _limitMinZ = (_rows / 2f) * _gridSize;
+        _limitMaxZ = _limitMinZ + (_rows - 1) * _gridSize;
+    }
 
-        // Z축: 시작점(오프셋)은 Rows의 절반, 최대점은 시작점 + (Rows - 1)
-        _limitMinZ = (_rows / 2f) * _gridSize; // 6 / 2 = 3
-        _limitMaxZ = _limitMinZ + (_rows - 1) * _gridSize; // 3 + 5 = 8
+    private void GenerateBorderAuras()
+    {
+        if (_borderAuraPrefab == null) return;
+
+        float halfScale = _gridSize / 2f;
+
+        // ★ 핵심: 상승 연출이 끝나면 스테이지의 최종 Y축 위치는 _leftBottomLocation.y + _riseAmount 가 됩니다.
+        // 아우라도 그 위에 딱 맞게 생성되도록 수정했습니다.
+        float finalYPos = _leftBottomLocation.y + _riseAmount + 0.5f;
+
+        Vector3 leftPos = new Vector3(_leftBottomLocation.x - halfScale, finalYPos, _leftBottomLocation.z + (_rows - 1) * _gridSize / 2f);
+        CreateAuraLine(leftPos, Quaternion.Euler(0, -90, 0), _rows, _gridSize);
+
+        Vector3 rightPos = new Vector3(_leftBottomLocation.x + (_columns - 1) * _gridSize + halfScale, finalYPos, _leftBottomLocation.z + (_rows - 1) * _gridSize / 2f);
+        CreateAuraLine(rightPos, Quaternion.Euler(0, 90, 0), _rows, _gridSize);
+
+        Vector3 topPos = new Vector3(_leftBottomLocation.x + (_columns - 1) * _gridSize / 2f, finalYPos, _leftBottomLocation.z + (_rows - 1) * _gridSize + halfScale);
+        CreateAuraLine(topPos, Quaternion.Euler(0, 0, 0), _columns, _gridSize);
+
+        Vector3 bottomPos = new Vector3(_leftBottomLocation.x + (_columns - 1) * _gridSize / 2f, finalYPos, _leftBottomLocation.z - halfScale);
+        CreateAuraLine(bottomPos, Quaternion.Euler(0, 180, 0), _columns, _gridSize);
+    }
+
+    private void CreateAuraLine(Vector3 pos, Quaternion rot, int lengthInTiles, float scale)
+    {
+        ParticleSystem auraParent = Instantiate(_borderAuraPrefab, pos, rot, this.transform);
+        float totalLength = lengthInTiles * scale;
+        ParticleSystem[] allAuras = auraParent.GetComponentsInChildren<ParticleSystem>();
+
+        foreach (ParticleSystem aura in allAuras)
+        {
+            var shape = aura.shape;
+            shape.radius = totalLength / 2f;
+
+            float baseRate = aura.emission.rateOverTime.constant;
+            var emission = aura.emission;
+            emission.rateOverTime = baseRate * totalLength;
+
+            var main = aura.main;
+            main.maxParticles = Mathf.CeilToInt(baseRate * totalLength * 3f);
+        }
+        auraParent.Play(true);
     }
 }
