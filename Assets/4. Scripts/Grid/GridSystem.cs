@@ -1,10 +1,11 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using TMPro;
 using Unity.Cinemachine;
 using UnityEngine;
 
+// 이 스크립트를 붙이면 MainStageHandler도 자동으로 같이 붙습니다!
+[RequireComponent(typeof(MainStageHandler))]
 public class GridSystem : MonoBehaviour
 {
     [Header("Grid Settings")]
@@ -15,7 +16,6 @@ public class GridSystem : MonoBehaviour
     public float _gridSize = 1;
     [Space(10)]
     public GameObject GridPrefab;
-    [Space(10)]
 
     [Header("Grid Camera Setting")]
     [SerializeField] private CinemachineCamera _followCamera;
@@ -30,22 +30,14 @@ public class GridSystem : MonoBehaviour
     [SerializeField] private float _maxZoom = 20f;
     [SerializeField] private float _zoomStepAmount = 5f;
 
-    [Header("Stage Animation Settings (등장 연출)")]
-    [SerializeField, Tooltip("스테이지가 위로 솟아오를 높이")]
-    private float _riseAmount = 0.45f;
+    [Header("Stage Animation Settings (초기 등장 연출)")]
+    [SerializeField] private float _riseAmount = 0.45f;
+    [SerializeField] private float _riseDuration = 1.5f;
 
-    [SerializeField, Tooltip("목표 위치까지 도달하는데 걸리는 시간 (초)")]
-    private float _riseDuration = 1.5f;
-
-    [Header("Dark Aura Settings (경계선 파티클)")]
+    [Header("Dark Aura Settings")]
     [SerializeField] private ParticleSystem _borderAuraPrefab;
 
-    private float _limitMinX;
-    private float _limitMaxX;
-    private float _limitMinZ;
-    private float _limitMaxZ;
-
-    // 분리된 시스템을 위한 전역 변수
+    private float _limitMinX, _limitMaxX, _limitMinZ, _limitMaxZ;
     private GameObject _stageContainer;
     private Vector2 _lastMoveInput;
 
@@ -53,15 +45,11 @@ public class GridSystem : MonoBehaviour
     {
         if (GridPrefab != null)
         {
-            // 1. 0의 위치에서 생성
             GenerateGrid();
-
-            // 2. 0에서 _riseAmount 만큼 위로 올라가는 연출 시작
-            StartCoroutine(AnimateGrid());
         }
         else
         {
-            Debug.LogError("GridPrefab is not assigned in the inspector.");
+            Debug.LogError("GridPrefab is not assigned.");
         }
     }
 
@@ -72,6 +60,13 @@ public class GridSystem : MonoBehaviour
         _followCamera.Follow = _gridCamPoint;
         _gridFirstCamPoint = _gridCamPoint;
 
+
+        // 2. 새로 추가할 부분! (계산이 끝난 이 '정중앙 절대좌표'를 핸들러에 주입합니다)
+        if (TryGetComponent(out MainStageHandler handler))
+        {
+            handler.SetDefaultCameraPosition(_gridCamPoint.position);
+        }
+
         _maxZoom = (_columns * 2f) + 30f;
         _followCamera.Lens.FieldOfView = _maxZoom;
         _targetFOV = _followCamera.Lens.FieldOfView;
@@ -81,7 +76,7 @@ public class GridSystem : MonoBehaviour
     {
         if (InputManager.Instance == null) return;
 
-        // 1. 이동 로직
+        // 이동 로직
         Vector2 currentMove = InputManager.Instance.Move;
         Vector3 moveInput = Vector3.zero;
 
@@ -101,7 +96,7 @@ public class GridSystem : MonoBehaviour
             _gridCamPoint.position = new Vector3(targetPosition.x, _gridCamPoint.position.y, targetPosition.z);
         }
 
-        // 2. 줌(Scroll) 로직
+        // 줌 로직
         float scroll = InputManager.Instance.Scroll;
         if (scroll != 0f)
         {
@@ -116,13 +111,10 @@ public class GridSystem : MonoBehaviour
         }
     }
 
-    // ★ 기능 분리: 타일 인스턴스화 담당
     private void GenerateGrid()
     {
         _stageContainer = new GameObject("StageContainer");
         _stageContainer.transform.SetParent(this.transform);
-
-        // 컨테이너의 시작 위치는 정확히 0
         _stageContainer.transform.localPosition = Vector3.zero;
 
         for (int i = 0; i < _columns; i++)
@@ -143,21 +135,20 @@ public class GridSystem : MonoBehaviour
             }
         }
 
-        // (이전에 있던 밑으로 끌어내리는 코드는 완전히 삭제했습니다.)
+        // ★ 핵심: 그리드 생성이 끝나면, 같은 오브젝트에 붙어있는 MainStageHandler를 찾아 연결해 줍니다!
+        if (TryGetComponent(out MainStageHandler handler))
+        {
+            handler.Initialize(_stageContainer.transform, _gridCamPoint, _followCamera);
+        }
     }
 
-    // ★ 기능 분리: 0에서 시작하여 위로(_riseAmount) 솟아오르는 연출
     private IEnumerator AnimateGrid()
     {
         if (_stageContainer == null) yield break;
 
-        // 시작 지점: 본래 위치인 0 (_leftBottomLocation.y 기준)
         Vector3 startPos = Vector3.zero;
-
-        // 목표 지점: 0에서 _riseAmount 만큼 위로 올라간 위치
         Vector3 endPos = new Vector3(0, _riseAmount, 0);
 
-        // 첫 프레임 강제 고정
         _stageContainer.transform.localPosition = startPos;
 
         float elapsed = 0f;
@@ -167,15 +158,11 @@ public class GridSystem : MonoBehaviour
             float easeT = t * t * (3f - 2f * t);
 
             _stageContainer.transform.localPosition = Vector3.Lerp(startPos, endPos, easeT);
-
             yield return null;
             elapsed += Time.deltaTime;
         }
 
-        // 루프가 끝나면 목표 높이에 정확히 안착
         _stageContainer.transform.localPosition = endPos;
-
-        // ★ 애니메이션 종료 후 아우라 생성
         GenerateBorderAuras();
     }
 
@@ -192,9 +179,6 @@ public class GridSystem : MonoBehaviour
         if (_borderAuraPrefab == null) return;
 
         float halfScale = _gridSize / 2f;
-
-        // ★ 핵심: 상승 연출이 끝나면 스테이지의 최종 Y축 위치는 _leftBottomLocation.y + _riseAmount 가 됩니다.
-        // 아우라도 그 위에 딱 맞게 생성되도록 수정했습니다.
         float finalYPos = _leftBottomLocation.y + _riseAmount + 0.5f;
 
         Vector3 leftPos = new Vector3(_leftBottomLocation.x - halfScale, finalYPos, _leftBottomLocation.z + (_rows - 1) * _gridSize / 2f);
@@ -220,14 +204,17 @@ public class GridSystem : MonoBehaviour
         {
             var shape = aura.shape;
             shape.radius = totalLength / 2f;
-
-            float baseRate = aura.emission.rateOverTime.constant;
             var emission = aura.emission;
+            float baseRate = emission.rateOverTime.constant;
             emission.rateOverTime = baseRate * totalLength;
-
             var main = aura.main;
             main.maxParticles = Mathf.CeilToInt(baseRate * totalLength * 3f);
         }
         auraParent.Play(true);
+    }
+
+    public void Fight()
+    {
+        StartCoroutine(AnimateGrid());
     }
 }

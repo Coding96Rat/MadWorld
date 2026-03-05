@@ -69,6 +69,7 @@ Material:
     m_Ints: []
     m_Floats:
     - _Brightness: 1
+    - _EmissionMultiplier: 0.643
     - _EnableExternalAlpha: 0
     - _MaxBrightness: 1
     - _MinBrightness: 0.03
