@@ -19,6 +19,8 @@ public class GridSystem : MonoBehaviour
 
     [Header("Grid Camera Setting")]
     [SerializeField] private CinemachineCamera _followCamera;
+    [SerializeField] private CinemachineCamera _fightCamera;  // 새로 추가할 FightCamera
+
     [SerializeField] private Transform _gridCamPoint;
     private Transform _gridFirstCamPoint;
     [SerializeField] private float _camSpeed = 10f;
@@ -36,21 +38,18 @@ public class GridSystem : MonoBehaviour
 
     [Header("Dark Aura Settings")]
     [SerializeField] private ParticleSystem _borderAuraPrefab;
+    [SerializeField, Tooltip("위/아래 파티클의 높이 배율 (기본 1.0)")]
+    private float _topBottomAuraHeight = 1.0f;
 
+    [SerializeField, Tooltip("좌/우 파티클의 높이 배율 (카메라 착시 보정용, 0.5 ~ 0.7 추천)")]
+    private float _leftRightAuraHeight = 0.6f;
     private float _limitMinX, _limitMaxX, _limitMinZ, _limitMaxZ;
     private GameObject _stageContainer;
     private Vector2 _lastMoveInput;
 
     private void Awake()
     {
-        if (GridPrefab != null)
-        {
-            GenerateGrid();
-        }
-        else
-        {
-            Debug.LogError("GridPrefab is not assigned.");
-        }
+        if (GridPrefab != null) GenerateGrid();
     }
 
     private void Start()
@@ -60,8 +59,6 @@ public class GridSystem : MonoBehaviour
         _followCamera.Follow = _gridCamPoint;
         _gridFirstCamPoint = _gridCamPoint;
 
-
-        // 2. 새로 추가할 부분! (계산이 끝난 이 '정중앙 절대좌표'를 핸들러에 주입합니다)
         if (TryGetComponent(out MainStageHandler handler))
         {
             handler.SetDefaultCameraPosition(_gridCamPoint.position);
@@ -74,9 +71,9 @@ public class GridSystem : MonoBehaviour
 
     private void Update()
     {
+        // ... (기존 이동 및 줌 로직 그대로 유지) ...
         if (InputManager.Instance == null) return;
 
-        // 이동 로직
         Vector2 currentMove = InputManager.Instance.Move;
         Vector3 moveInput = Vector3.zero;
 
@@ -96,7 +93,6 @@ public class GridSystem : MonoBehaviour
             _gridCamPoint.position = new Vector3(targetPosition.x, _gridCamPoint.position.y, targetPosition.z);
         }
 
-        // 줌 로직
         float scroll = InputManager.Instance.Scroll;
         if (scroll != 0f)
         {
@@ -113,6 +109,7 @@ public class GridSystem : MonoBehaviour
 
     private void GenerateGrid()
     {
+        // ... (기존 로직 유지) ...
         _stageContainer = new GameObject("StageContainer");
         _stageContainer.transform.SetParent(this.transform);
         _stageContainer.transform.localPosition = Vector3.zero;
@@ -135,11 +132,23 @@ public class GridSystem : MonoBehaviour
             }
         }
 
-        // ★ 핵심: 그리드 생성이 끝나면, 같은 오브젝트에 붙어있는 MainStageHandler를 찾아 연결해 줍니다!
         if (TryGetComponent(out MainStageHandler handler))
         {
             handler.Initialize(_stageContainer.transform, _gridCamPoint, _followCamera);
         }
+    }
+
+    public void StartStageAnim()
+    {
+        // ★ 1. Fight 버튼이 눌리자마자 즉시 카메라 전환 명령을 내립니다.
+        if (_fightCamera != null && _followCamera != null)
+        {
+            _fightCamera.Priority = 10;
+            _followCamera.Priority = 0;
+        }
+
+        // 2. 그리고 무대가 솟아오르는 코루틴을 실행합니다.
+        StartCoroutine(AnimateGrid());
     }
 
     private IEnumerator AnimateGrid()
@@ -158,6 +167,7 @@ public class GridSystem : MonoBehaviour
             float easeT = t * t * (3f - 2f * t);
 
             _stageContainer.transform.localPosition = Vector3.Lerp(startPos, endPos, easeT);
+
             yield return null;
             elapsed += Time.deltaTime;
         }
@@ -166,6 +176,7 @@ public class GridSystem : MonoBehaviour
         GenerateBorderAuras();
     }
 
+    // ... (나머지 CalculateCameraLimits, GenerateBorderAuras 함수는 기존과 완벽히 동일하게 유지) ...
     private void CalculateCameraLimits()
     {
         _limitMinX = 0f;
@@ -182,19 +193,19 @@ public class GridSystem : MonoBehaviour
         float finalYPos = _leftBottomLocation.y + _riseAmount + 0.5f;
 
         Vector3 leftPos = new Vector3(_leftBottomLocation.x - halfScale, finalYPos, _leftBottomLocation.z + (_rows - 1) * _gridSize / 2f);
-        CreateAuraLine(leftPos, Quaternion.Euler(0, -90, 0), _rows, _gridSize);
+        CreateAuraLine(leftPos, Quaternion.Euler(0, -90, 0), _rows, _gridSize, _leftRightAuraHeight);
 
         Vector3 rightPos = new Vector3(_leftBottomLocation.x + (_columns - 1) * _gridSize + halfScale, finalYPos, _leftBottomLocation.z + (_rows - 1) * _gridSize / 2f);
-        CreateAuraLine(rightPos, Quaternion.Euler(0, 90, 0), _rows, _gridSize);
+        CreateAuraLine(rightPos, Quaternion.Euler(0, 90, 0), _rows, _gridSize, _leftRightAuraHeight);
 
         Vector3 topPos = new Vector3(_leftBottomLocation.x + (_columns - 1) * _gridSize / 2f, finalYPos, _leftBottomLocation.z + (_rows - 1) * _gridSize + halfScale);
-        CreateAuraLine(topPos, Quaternion.Euler(0, 0, 0), _columns, _gridSize);
+        CreateAuraLine(topPos, Quaternion.Euler(0, 0, 0), _columns, _gridSize, _topBottomAuraHeight);
 
         Vector3 bottomPos = new Vector3(_leftBottomLocation.x + (_columns - 1) * _gridSize / 2f, finalYPos, _leftBottomLocation.z - halfScale);
-        CreateAuraLine(bottomPos, Quaternion.Euler(0, 180, 0), _columns, _gridSize);
+        CreateAuraLine(bottomPos, Quaternion.Euler(0, 180, 0), _columns, _gridSize, _topBottomAuraHeight);
     }
 
-    private void CreateAuraLine(Vector3 pos, Quaternion rot, int lengthInTiles, float scale)
+    private void CreateAuraLine(Vector3 pos, Quaternion rot, int lengthInTiles, float scale, float heightMultiplier)
     {
         ParticleSystem auraParent = Instantiate(_borderAuraPrefab, pos, rot, this.transform);
         float totalLength = lengthInTiles * scale;
@@ -204,17 +215,16 @@ public class GridSystem : MonoBehaviour
         {
             var shape = aura.shape;
             shape.radius = totalLength / 2f;
+
             var emission = aura.emission;
             float baseRate = emission.rateOverTime.constant;
             emission.rateOverTime = baseRate * totalLength;
+
             var main = aura.main;
             main.maxParticles = Mathf.CeilToInt(baseRate * totalLength * 3f);
+            main.startLifetimeMultiplier *= heightMultiplier;
+            main.startSpeedMultiplier *= heightMultiplier;
         }
         auraParent.Play(true);
-    }
-
-    public void Fight()
-    {
-        StartCoroutine(AnimateGrid());
     }
 }

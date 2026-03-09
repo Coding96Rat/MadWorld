@@ -1,9 +1,11 @@
-using System.Collections;
 using Unity.Cinemachine;
 using UnityEngine;
+using DG.Tweening;
 
 public class MainStageHandler : MonoBehaviour
 {
+    private StageStateManager _stageStateManager;
+
     [Header("1. 출발 연출 (Departure)")]
     [SerializeField] private float _dipAmount = 0.15f;
     [SerializeField] private float _dipDuration = 0.1f;
@@ -25,7 +27,6 @@ public class MainStageHandler : MonoBehaviour
     [SerializeField, Tooltip("도착 지점(0)에 도달하기 몇 초 전에 페이드 아웃을 시작할지")]
     private float _fadeOutTime = 0.5f;
 
-    // 인스펙터에 노출하지 않는 기본 알파 변화 시간 (원래 기본값)
     private const float DefaultFadeInSpeed = 0.5f;
     private const float DefaultFadeOutSpeed = 1.0f;
 
@@ -39,7 +40,8 @@ public class MainStageHandler : MonoBehaviour
     [SerializeField, Tooltip("도착 시 목표 지점(0)을 뚫고 살짝 위로 솟구치는 높이 (오버슈트)")]
     private float _arrivalOvershootAmount = 0.2f;
     [SerializeField, Tooltip("위로 솟구쳤다가 정위치(0)로 덜컹 하고 내려앉는 시간")]
-    private float _arrivalSettleDuration = 0.15f;
+    private float _arrivalSettleDuration = 0.3f;
+
 
     public System.Action OnScreenBlackout;
 
@@ -49,6 +51,13 @@ public class MainStageHandler : MonoBehaviour
     private bool _isMoving = false;
 
     private Vector3 _defaultCamPos;
+
+    private Sequence _elevatorSequence;
+
+    private void Awake()
+    {
+        _stageStateManager = GetComponent<StageStateManager>();
+    }
 
     public void Initialize(Transform stageContainer, Transform cameraTarget, CinemachineCamera vCam)
     {
@@ -71,140 +80,88 @@ public class MainStageHandler : MonoBehaviour
     public void MoveUp()
     {
         if (_isMoving || _stageContainer == null || _cameraTarget == null) return;
-        StartCoroutine(ElevatorRoutine());
+        if (_elevatorSequence != null && _elevatorSequence.IsActive()) return;
+
+        _isMoving = true;
+        PlayElevatorSequence();
     }
 
-    private IEnumerator ElevatorRoutine()
+    private void PlayElevatorSequence()
     {
-        _isMoving = true;
-
         Vector3 originalStagePos = _stageContainer.localPosition;
         Vector3 currentCamPos = _cameraTarget.position;
 
-        // --- Phase 1: 덜컹! ---
-        Vector3 dipPos = originalStagePos + new Vector3(0, -_dipAmount, 0);
-        Vector3 camDipPos = currentCamPos + new Vector3(0, -_dipAmount, 0);
+        _elevatorSequence = DOTween.Sequence();
 
-        float elapsed = 0f;
-        while (elapsed < _dipDuration)
-        {
-            elapsed += Time.deltaTime;
-            float t = Mathf.Clamp01(elapsed / _dipDuration);
-            float easeT = Mathf.Sin(t * Mathf.PI * 0.5f);
-
-            _stageContainer.localPosition = Vector3.Lerp(originalStagePos, dipPos, easeT);
-            _cameraTarget.position = Vector3.Lerp(currentCamPos, camDipPos, easeT);
-            yield return null;
-        }
+        // --- Phase 1: 덜컹! (Dip) ---
+        _elevatorSequence.Append(_stageContainer.DOLocalMoveY(originalStagePos.y - _dipAmount, _dipDuration).SetEase(Ease.OutQuad));
+        _elevatorSequence.Join(_cameraTarget.DOMoveY(currentCamPos.y - _dipAmount, _dipDuration).SetEase(Ease.OutQuad));
 
         // --- Phase 1.5: 철-컥! (멈춤) ---
-        if (_pauseDuration > 0f) yield return new WaitForSeconds(_pauseDuration);
+        _elevatorSequence.AppendInterval(_pauseDuration);
 
         // --- Phase 2: 출발 (가속 상승) ---
-        Vector3 departureEndPos = originalStagePos + new Vector3(0, _departureRiseHeight, 0);
-        Vector3 camDepartureEndPos = currentCamPos + new Vector3(0, _departureRiseHeight, 0);
+        _elevatorSequence.Append(_stageContainer.DOLocalMoveY(originalStagePos.y + _departureRiseHeight, _departureDuration).SetEase(Ease.InCubic));
+        _elevatorSequence.Join(_cameraTarget.DOMoveY(currentCamPos.y + _departureRiseHeight, _departureDuration).SetEase(Ease.InCubic));
 
-        if (_fadePanel != null) _fadePanel.blocksRaycasts = true;
-
-        // 페이드 인 코루틴 실행 (설정한 _fadeInTime 지연 후 시작)
-        Coroutine fadeCoroutine = StartCoroutine(FadeInRoutine(_fadeInTime));
-
-        elapsed = 0f;
-        while (elapsed < _departureDuration)
+        if (_fadePanel != null)
         {
-            elapsed += Time.deltaTime;
-            float t = Mathf.Clamp01(elapsed / _departureDuration);
-            float easeT = t * t * t; // Ease In
-
-            _stageContainer.localPosition = Vector3.Lerp(dipPos, departureEndPos, easeT);
-            _cameraTarget.position = Vector3.Lerp(camDipPos, camDepartureEndPos, easeT);
-            yield return null;
+            float fadeInStartTime = _dipDuration + _pauseDuration + _fadeInTime;
+            _elevatorSequence.InsertCallback(fadeInStartTime, () => _fadePanel.blocksRaycasts = true);
+            _elevatorSequence.Insert(fadeInStartTime, _fadePanel.DOFade(_fadeMaxAlpha, DefaultFadeInSpeed));
         }
-
-        if (fadeCoroutine != null) yield return fadeCoroutine;
 
         // --- Phase 3: 완전 암전 상태 (The Void) --- 
-        Vector3 arrivalStartPos = originalStagePos + new Vector3(0, _arrivalStartHeight, 0);
+        _elevatorSequence.AppendCallback(() =>
+        {
+            _stageContainer.localPosition = new Vector3(originalStagePos.x, originalStagePos.y + _arrivalStartHeight, originalStagePos.z);
+            _cameraTarget.position = _defaultCamPos;
 
-        _stageContainer.localPosition = arrivalStartPos;
-        _cameraTarget.position = _defaultCamPos;
+            if (_virtualCamera != null) _virtualCamera.PreviousStateIsValid = false;
+            if (_fadePanel != null) _fadePanel.alpha = _fadeMaxAlpha;
 
-        if (_virtualCamera != null) _virtualCamera.PreviousStateIsValid = false;
-        if (_fadePanel != null) _fadePanel.alpha = _fadeMaxAlpha;
-
-        OnScreenBlackout?.Invoke();
+            OnScreenBlackout?.Invoke();
+        });
 
         // --- Phase 4: 도착 상승 (오버슈트 지점까지) ---
-        Vector3 overshootPos = originalStagePos + new Vector3(0, _arrivalOvershootAmount, 0);
+        float arrivalStartTime = _elevatorSequence.Duration();
+        _elevatorSequence.Append(_stageContainer.DOLocalMoveY(originalStagePos.y + _arrivalOvershootAmount, _arrivalDuration).SetEase(Ease.OutCubic));
 
-        // 도착 전 특정 남은 시간에 페이드 아웃이 시작되도록 계산하여 실행
-        float fadeOutDelay = Mathf.Max(0f, _arrivalDuration - _fadeOutTime);
-        StartCoroutine(FadeOutRoutine(fadeOutDelay));
-
-        elapsed = 0f;
-        while (elapsed < _arrivalDuration)
+        if (_fadePanel != null)
         {
-            elapsed += Time.deltaTime;
-            float t = Mathf.Clamp01(elapsed / _arrivalDuration);
-            float easeT = 1f - Mathf.Pow(1f - t, 3f); // Ease Out (감속)
+            float fadeOutDelay = Mathf.Max(0f, _arrivalDuration - _fadeOutTime);
+            _elevatorSequence.Insert(arrivalStartTime + fadeOutDelay, _fadePanel.DOFade(0f, DefaultFadeOutSpeed));
+        }
 
-            _stageContainer.localPosition = Vector3.Lerp(arrivalStartPos, overshootPos, easeT);
+        // --- Phase 5: 도착 덜컹! (스무스 0.08 -> 바운스 0) ---
+        // 5-1. 오버슈트 지점에서 0.08 높이까지 스으윽 부드럽게 내려감
+        _elevatorSequence.Append(_stageContainer.DOLocalMoveY(originalStagePos.y + 0.08f, _arrivalSettleDuration * 0.5f).SetEase(Ease.InOutSine));
+
+        // [수정된 부분] 0.08에서 0으로 바닥을 쾅! 찍고 바운스가 시작되는 정확히 그 찰나의 순간!
+        _elevatorSequence.AppendCallback(() =>
+        {
+            _stageStateManager.ElevatorArrived();
+        });
+
+        // 5-2. 0.08에서 0으로 팍! 떨어지며 기계적인 바운스 터짐
+        _elevatorSequence.Append(_stageContainer.DOLocalMoveY(originalStagePos.y, _arrivalSettleDuration * 0.5f).SetEase(Ease.OutBounce));
+
+        // --- 오차 보정 및 종료 처리 ---
+        _elevatorSequence.OnComplete(() =>
+        {
+            _stageContainer.localPosition = originalStagePos;
             _cameraTarget.position = _defaultCamPos;
 
-            yield return null;
-        }
-
-        // --- Phase 5: 도착 덜컹! ---
-        elapsed = 0f;
-        while (elapsed < _arrivalSettleDuration)
-        {
-            elapsed += Time.deltaTime;
-            float t = Mathf.Clamp01(elapsed / _arrivalSettleDuration);
-            float easeT = Mathf.Sin(t * Mathf.PI * 0.5f);
-
-            _stageContainer.localPosition = Vector3.Lerp(overshootPos, originalStagePos, easeT);
-            _cameraTarget.position = _defaultCamPos;
-
-            yield return null;
-        }
-
-        // --- 오차 보정 ---
-        _stageContainer.localPosition = originalStagePos;
-        _cameraTarget.position = _defaultCamPos;
-
-        if (_fadePanel != null) _fadePanel.blocksRaycasts = false;
-        _isMoving = false;
+            if (_fadePanel != null) _fadePanel.blocksRaycasts = false;
+            _isMoving = false;
+        });
     }
 
-    private IEnumerator FadeInRoutine(float delay)
+    private void OnDestroy()
     {
-        if (_fadePanel == null) yield break;
-
-        if (delay > 0f) yield return new WaitForSeconds(delay);
-
-        float elapsed = 0f;
-        while (elapsed < DefaultFadeInSpeed)
+        if (_elevatorSequence != null)
         {
-            elapsed += Time.deltaTime;
-            _fadePanel.alpha = Mathf.Lerp(0f, _fadeMaxAlpha, elapsed / DefaultFadeInSpeed);
-            yield return null;
+            _elevatorSequence.Kill();
         }
-        _fadePanel.alpha = _fadeMaxAlpha;
-    }
-
-    private IEnumerator FadeOutRoutine(float delay)
-    {
-        if (_fadePanel == null) yield break;
-
-        if (delay > 0f) yield return new WaitForSeconds(delay);
-
-        float elapsed = 0f;
-        while (elapsed < DefaultFadeOutSpeed)
-        {
-            elapsed += Time.deltaTime;
-            _fadePanel.alpha = Mathf.Lerp(_fadeMaxAlpha, 0f, elapsed / DefaultFadeOutSpeed);
-            yield return null;
-        }
-        _fadePanel.alpha = 0f;
     }
 }
