@@ -22,6 +22,7 @@ public class GridSystem : MonoBehaviour
     [SerializeField] private CinemachineCamera _fightCamera;  // 새로 추가할 FightCamera
 
     [SerializeField] private Transform _gridCamPoint;
+
     private Transform _gridFirstCamPoint;
     [SerializeField] private float _camSpeed = 10f;
     [Space(5)]
@@ -67,11 +68,12 @@ public class GridSystem : MonoBehaviour
         _maxZoom = (_columns * 2f) + 30f;
         _followCamera.Lens.FieldOfView = _maxZoom;
         _targetFOV = _followCamera.Lens.FieldOfView;
+        _fightCamera.Lens.FieldOfView = _maxZoom;
     }
 
     private void Update()
     {
-        // ... (기존 이동 및 줌 로직 그대로 유지) ...
+        // ... (이동 로직은 기존과 동일하게 유지) ...
         if (InputManager.Instance == null) return;
 
         Vector2 currentMove = InputManager.Instance.Move;
@@ -93,17 +95,35 @@ public class GridSystem : MonoBehaviour
             _gridCamPoint.position = new Vector3(targetPosition.x, _gridCamPoint.position.y, targetPosition.z);
         }
 
+        // ==========================================
+        // 수정된 줌(Zoom) 로직
+        // ==========================================
         float scroll = InputManager.Instance.Scroll;
         if (scroll != 0f)
         {
             float scrollDir = Mathf.Sign(scroll);
-            LensSettings lens = _followCamera.Lens;
 
-            if (scrollDir > 0) lens.FieldOfView -= _zoomStepAmount;
-            else if (scrollDir < 0) lens.FieldOfView += _zoomStepAmount;
+            // 1. _targetFOV를 업데이트 (미리 선언해두신 변수 활용)
+            if (scrollDir > 0) _targetFOV -= _zoomStepAmount;
+            else if (scrollDir < 0) _targetFOV += _zoomStepAmount;
 
-            lens.FieldOfView = Mathf.Clamp(lens.FieldOfView, _minZoom, _maxZoom);
-            _followCamera.Lens = lens;
+            _targetFOV = Mathf.Clamp(_targetFOV, _minZoom, _maxZoom);
+
+            // 2. _followCamera에 적용
+            if (_followCamera != null)
+            {
+                LensSettings followLens = _followCamera.Lens;
+                followLens.FieldOfView = _targetFOV;
+                _followCamera.Lens = followLens;
+            }
+
+            // 3. _fightCamera에도 동일하게 적용 (null 체크)
+            if (_fightCamera != null)
+            {
+                LensSettings fightLens = _fightCamera.Lens;
+                fightLens.FieldOfView = _targetFOV;
+                _fightCamera.Lens = fightLens;
+            }
         }
     }
 
@@ -181,8 +201,12 @@ public class GridSystem : MonoBehaviour
     {
         _limitMinX = 0f;
         _limitMaxX = (_columns - 1) * _gridSize;
-        _limitMinZ = (_rows / 2f) * _gridSize;
-        _limitMaxZ = _limitMinZ + (_rows - 1) * _gridSize;
+
+        // 기존 하단 한계점((_rows / 2f) * _gridSize)에서 1칸(_gridSize) 더 아래로 갈 수 있도록 -1f를 해줍니다.
+        _limitMinZ = ((_rows / 2f) - 1f) * _gridSize;
+
+        // 상단 한계점은 기존과 동일한 절대 좌표를 유지하도록 원래의 시작점 기준으로 더해줍니다.
+        _limitMaxZ = (_rows / 2f) * _gridSize + (_rows - 1) * _gridSize;
     }
 
     private void GenerateBorderAuras()
